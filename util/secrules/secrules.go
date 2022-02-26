@@ -52,6 +52,10 @@ const (
 	RELATION_OVERLAP     = TSecurityRuleRelation("OVERLAP")
 )
 
+const (
+	DefaultPriority = int(1)
+)
+
 type SecurityRule struct {
 	Priority    int // [1, 100]
 	Action      TSecurityRuleAction
@@ -119,16 +123,39 @@ func MustParseSecurityRule(s string) *SecurityRule {
 }
 
 func ParseSecurityRule(pattern string) (*SecurityRule, error) {
+	pattern = strings.ToLower(pattern)
+
 	rule := &SecurityRule{}
-	for _, direction := range []TSecurityRuleDirection{SecurityRuleIngress, SecurityRuleEgress} {
-		if len(pattern) > len(direction)+1 && pattern[:len(direction)+1] == string(direction)+":" {
-			rule.Direction, pattern = direction, strings.Replace(pattern, string(direction)+":", "", -1)
-			break
-		}
-	}
-	if rule.Direction == "" {
+
+	if strings.HasPrefix(pattern, string(SecurityRuleIngress)) {
+		rule.Direction = SecurityRuleIngress
+	} else if strings.HasPrefix(pattern, string(SecurityRuleEgress)) {
+		rule.Direction = SecurityRuleEgress
+	} else {
 		return nil, ErrInvalidDirection
 	}
+	pattern = pattern[len(rule.Direction):]
+	if pattern[0] == '@' {
+		commaPos := strings.IndexByte(pattern, ':')
+		if commaPos > 0 {
+			p, _ := strconv.ParseInt(pattern[1:commaPos], 10, 64)
+			if p < 1 {
+				p = 1
+			} else if p > 100 {
+				p = 100
+			}
+			rule.Priority = int(p)
+			pattern = pattern[commaPos+1:]
+		} else {
+			return nil, ErrInvalidPriority
+		}
+	} else if pattern[0] == ':' {
+		rule.Priority = DefaultPriority // default priority 1
+		pattern = pattern[1:]
+	} else {
+		return nil, ErrInvalidPriority
+	}
+
 	status := SEG_ACTION
 	data := strings.Split(strings.TrimSpace(pattern), " ")
 	index, seg := 0, ""
@@ -395,7 +422,11 @@ func (rule *SecurityRule) GetPortsString() string {
 
 func (rule *SecurityRule) String() (result string) {
 	s := []string{}
-	s = append(s, string(rule.Direction)+":"+string(rule.Action))
+	if rule.Priority == DefaultPriority {
+		s = append(s, fmt.Sprintf("%s:%s", rule.Direction, rule.Action))
+	} else {
+		s = append(s, fmt.Sprintf("%s@%d:%s", rule.Direction, rule.Priority, rule.Action))
+	}
 	cidr := rule.IPNet.String()
 	if cidr != "0.0.0.0/0" {
 		if ones, _ := rule.IPNet.Mask.Size(); ones < 32 {
